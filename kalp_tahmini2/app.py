@@ -2,21 +2,26 @@ import base64
 from pathlib import Path
 import time
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 from model import (
+    KMeansSiniflandirici,
     KNN,
     KararAgaci,
     LojistikRegresyon,
     NaiveBayes,
     agaci_yaziya_cevir,
+    capraz_dogrulama,
     hiperparametre_ara,
+    hiperparametre_ara_kmeans,
     hiperparametre_ara_knn,
     hiperparametre_ara_lojistik,
     hiperparametre_ara_naive_bayes,
     metrikleri_hesapla,
+    roc_egrisi_hesapla,
 )
 
 
@@ -276,7 +281,7 @@ div.stButton > button[kind="secondary"] {
 .fabrica-plate {
   position: relative;
   width: 100%;
-  height: 540px;
+  height: 620px;
   background: var(--paper);
   border: 1px solid var(--rule-strong);
   outline: 4px solid var(--paper);
@@ -303,7 +308,7 @@ div.stButton > button[kind="secondary"] {
 
 .plate-ring-1, .plate-ring-2 {
   position: absolute;
-  top: 50%;
+  top: 42%;
   left: 50%;
   transform: translate(-50%, -50%);
   border-radius: 50%;
@@ -317,7 +322,7 @@ div.stButton > button[kind="secondary"] {
 
 .fabrica-heart-wrap {
   position: absolute;
-  top: 50%;
+  top: 42%;
   left: 50%;
   transform: translate(-50%, -50%);
   width: 330px;
@@ -380,8 +385,20 @@ div.stButton > button[kind="secondary"] {
 
 .node-tl { top: 44px; left: 34px; }
 .node-tr { top: 44px; right: 34px; }
-.node-bl { bottom: 44px; left: 34px; }
-.node-br { bottom: 44px; right: 34px; border-color: var(--crimson); background: rgba(253, 246, 244, 0.96); }
+.node-bl { bottom: 118px; left: 34px; }
+.node-br { bottom: 118px; right: 34px; border-color: var(--crimson); background: rgba(253, 246, 244, 0.96); }
+.node-bc {
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 320px;
+  border-style: dashed;
+  border-color: var(--ink-faint);
+  background: rgba(244, 239, 228, 0.96);
+}
+.node-bc:hover {
+  transform: translateX(-50%) translateY(-3px);
+}
 
 .callout-fig {
   font-family: 'JetBrains Mono', monospace;
@@ -440,6 +457,11 @@ div.stButton > button[kind="secondary"] {
     left: auto;
     right: auto;
     bottom: auto;
+    width: 100%;
+  }
+  .node-bc {
+    transform: none;
+    left: auto;
     width: 100%;
   }
 }
@@ -613,6 +635,54 @@ def render_kpi_card(label, value, sub="", delta=None, delta_positive=True):
     )
 
 
+def roc_grafigi_ciz(egri_listesi, baslik="ROC Eğrisi (Alıcı İşletim Karakteristiği)"):
+    """Fabrica parsomen paletinde tekli veya coklu ROC egrisi cizer."""
+    fig, ax = plt.subplots(figsize=(6.4, 4.3), facecolor="#FAF7F0")
+    ax.set_facecolor("#FAF7F0")
+    for ad, fpr, tpr, auc_val, renk in egri_listesi:
+        ax.plot(fpr, tpr, label=f"{ad} (AUC = {auc_val:.4f})", color=renk, linewidth=2.2)
+    ax.plot([0, 1], [0, 1], linestyle="--", color="#8C8273", linewidth=1.2, label="Rastgele Tahmin (0.5000)")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.02)
+    ax.set_xlabel("Yanlış Pozitif Oranı (1 - Özgüllük)", fontsize=9.5, color="#1E1B18")
+    ax.set_ylabel("Doğru Pozitif Oranı (Duyarlılık)", fontsize=9.5, color="#1E1B18")
+    ax.set_title(baslik, fontsize=11.5, fontweight="bold", color="#1E1B18", pad=10)
+    ax.grid(True, linestyle=":", alpha=0.5, color="#B9AD99")
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    for spine in ("bottom", "left"):
+        ax.spines[spine].set_color("#B9AD99")
+    ax.tick_params(colors="#5C5549", labelsize=8.5)
+    ax.legend(loc="lower right", frameon=True, facecolor="#F4EFE4", edgecolor="#D8CFC0", fontsize=8.3)
+    plt.tight_layout()
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
+
+def xai_katki_grafigi_ciz(aciklama_df, top_n=10):
+    """Tek bir hasta icin riski en cok artiran ve azaltan ozellikleri cizer."""
+    artiran = aciklama_df[aciklama_df["katki"] > 0].head(top_n // 2)
+    azaltan = aciklama_df[aciklama_df["katki"] < 0].head(top_n // 2)
+    secilen = pd.concat([artiran, azaltan]).sort_values(by="katki", ascending=True)
+    if secilen.empty:
+        return
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.0), facecolor="#FAF7F0")
+    ax.set_facecolor("#FAF7F0")
+    renkler = ["#9B2226" if v > 0 else "#2D6A4F" for v in secilen["katki"]]
+    ax.barh(secilen["ozellik"], secilen["katki"], color=renkler, height=0.62, edgecolor="#1E1B18", linewidth=0.4)
+    ax.axvline(0.0, color="#1E1B18", linewidth=1.0)
+    ax.set_xlabel("Risk Katkısı (← Sağlıklı Yönü | Kalp Hastalığı Yönü →)", fontsize=9, color="#1E1B18")
+    ax.set_title("Bu Hasta İçin En Etkili Faktörler (XAI)", fontsize=11, fontweight="bold", color="#1E1B18", pad=8)
+    ax.grid(axis="x", linestyle=":", alpha=0.5, color="#B9AD99")
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax.tick_params(colors="#1E1B18", labelsize=8.5)
+    plt.tight_layout()
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
+
 # =========================================================
 # VERI SETINI OKU, HAZIRLA VE OPTIMIZE MODELLERI ONBELLEKLE
 # =========================================================
@@ -756,7 +826,7 @@ def optimize_model_calistir(algoritma_kod, egitim_yuzdesi=80):
             hedef_metrik="accuracy",
         )
         ekstra["ozellik_df"] = model.ozellik_ayirt_edicilik_df()
-    else:
+    elif algoritma_kod == "knn":
         model, ayar, sonuclar_df = hiperparametre_ara_knn(
             X_egitim,
             y_egitim,
@@ -767,12 +837,25 @@ def optimize_model_calistir(algoritma_kod, egitim_yuzdesi=80):
         )
         ekstra["ozellik_df"] = model.ozellik_agirliklari_df()
         ekstra["referans_sayisi"] = len(model.X_ref_s)
+    else:
+        model, ayar, sonuclar_df = hiperparametre_ara_kmeans(
+            X_egitim,
+            y_egitim,
+            X_dogrulama,
+            y_dogrulama,
+            ozellik_isimleri,
+            hedef_metrik="accuracy",
+        )
+        ekstra["kume_df"] = model.kume_ozeti_df()
+        ekstra["inertia"] = model.inertia
+        ekstra["tamamlanan_iterasyon"] = model.tamamlanan_iterasyon
 
     test_olasilik = model.predict_proba(X_test)
     tahmin = (test_olasilik >= 0.5).astype(int)
     metrikler = metrikleri_hesapla(
         y_test, tahmin, olasiliklar=test_olasilik
     )
+    roc_fpr, roc_tpr = roc_egrisi_hesapla(y_test, test_olasilik)
     sure = time.time() - t0
 
     return {
@@ -781,12 +864,65 @@ def optimize_model_calistir(algoritma_kod, egitim_yuzdesi=80):
         "ayar": ayar,
         "sonuclar_df": sonuclar_df,
         "metrikler": metrikler,
+        "roc_fpr": roc_fpr,
+        "roc_tpr": roc_tpr,
         "sure": sure,
         "n_train": len(y_egitim),
         "n_val": len(y_dogrulama),
         "n_test": len(y_test),
         "ekstra": ekstra,
     }
+
+
+@st.cache_data
+def capraz_dogrulama_calistir(algoritma_kod):
+    """Secilen algoritmanin en iyi ayarlariyla 5-Katli Capraz Dogrulama (5-Fold CV) calistirir."""
+    df_lokal = veri_yukle()
+    X_df = pd.get_dummies(df_lokal.drop(columns=[HEDEF_SUTUN]), dtype=np.uint8)
+    X = X_df.to_numpy(dtype=float)
+    y = df_lokal[HEDEF_SUTUN].to_numpy(dtype=int)
+    ozellikler = X_df.columns.tolist()
+
+    ayar = optimize_model_calistir(algoritma_kod, egitim_yuzdesi=80)["ayar"]
+    if algoritma_kod == "karar_agaci":
+        uretici = lambda: KararAgaci(
+            derinlik=ayar["derinlik"],
+            min_bolunme=ayar["min_bolunme"],
+            min_yaprak=ayar["min_yaprak"],
+            kriter=ayar["kriter"],
+        )
+    elif algoritma_kod == "lojistik":
+        uretici = lambda: LojistikRegresyon(
+            ogrenme_orani=ayar["ogrenme_orani"],
+            iterasyon=300,
+            l2_lambda=ayar["l2_lambda"],
+            optimizasyon=ayar["optimizasyon"],
+        )
+    elif algoritma_kod == "naive_bayes":
+        uretici = lambda: NaiveBayes(
+            yontem=ayar["yontem"],
+            var_smoothing=ayar["var_smoothing"],
+            alpha=ayar["alpha"],
+            bin_sayisi=ayar["bin_sayisi"] or 16,
+        )
+    elif algoritma_kod == "knn":
+        uretici = lambda: KNN(
+            k=ayar["k"],
+            mesafe=ayar["mesafe"],
+            agirliklandirma=ayar["agirliklandirma"],
+            ozellik_agirlikli=ayar["ozellik_agirlikli"],
+            maks_referans=10000,
+        )
+    else:
+        uretici = lambda: KMeansSiniflandirici(
+            k=ayar["k"],
+            maks_iter=ayar["maks_iter"],
+            baslatma=ayar["baslatma"],
+        )
+
+    t0 = time.time()
+    kat_df, ozet = capraz_dogrulama(uretici, X, y, ozellikler, k_kat=5)
+    return kat_df, ozet, time.time() - t0
 
 
 def goster_tekli_sonuc(algoritma_ad, algoritma_kod, sonuc, egitim_yuzdesi):
@@ -805,6 +941,13 @@ def goster_tekli_sonuc(algoritma_ad, algoritma_kod, sonuc, egitim_yuzdesi):
 </div>""",
         unsafe_allow_html=True,
     )
+
+    if algoritma_kod == "kmeans":
+        st.warning(
+            "**Negatif Referans (Denetimsiz Kümeleme):** K-Means, eğitim aşamasında `heart_disease` etiketini hiç görmeden ve "
+            "Z-skor ölçekleme yapmadan ham Öklid mesafesiyle küme oluşturur. Bu nedenle denetimli modellere kıyasla belirgin şekilde "
+            "düşük sınıflandırma başarısı üretir."
+        )
 
     st.markdown(
         '<div class="bento-grid bento-cols-5">'
@@ -854,20 +997,48 @@ def goster_tekli_sonuc(algoritma_ad, algoritma_kod, sonuc, egitim_yuzdesi):
                 f"• Laplace (alpha): <strong>{ayar['alpha']}</strong> | Varyans Yumuşatma: <strong>{ayar['var_smoothing']}</strong><br>"
                 f"• Log-Loss: <strong>{metrikler['log_loss']:.4f}</strong> | Eğitim/Test: <strong>%{egitim_yuzdesi} / %{100 - egitim_yuzdesi}</strong>"
             )
-        else:
+        elif algoritma_kod == "knn":
             ozet = (
                 f"• Mesafe: <strong>{ayar['mesafe'].upper()}</strong> | K: <strong>{ayar['k']}</strong> | Oylama: <strong>{ayar['agirliklandirma'].upper()}</strong><br>"
                 f"• Özellik Ağırlıklandırma: <strong>{'Açık (Korelasyon)' if ayar['ozellik_agirlikli'] else 'Kapalı'}</strong> | Referans: <strong>{ekstra['referans_sayisi']:,}</strong><br>"
                 f"• Eğitim/Test: <strong>%{egitim_yuzdesi} / %{100 - egitim_yuzdesi}</strong>"
+            )
+        else:
+            ozet = (
+                f"• Yöntem: <strong>Denetimsiz K-Means ({ayar['baslatma'].upper()})</strong> | K: <strong>{ayar['k']}</strong><br>"
+                f"• Tamamlanan İterasyon: <strong>{ekstra['tamamlanan_iterasyon']}</strong> | Inertia: <strong>{ekstra['inertia']:,.0f}</strong><br>"
+                f"• Ölçekleme: <strong>Yok (Ham Öklid)</strong> | Eğitim/Test: <strong>%{egitim_yuzdesi} / %{100 - egitim_yuzdesi}</strong>"
             )
         st.markdown(
             f'<div class="folio-card"><div style="font-size:0.88rem; line-height:1.9; color:var(--ink-muted);">{ozet}</div></div>',
             unsafe_allow_html=True,
         )
 
+    if sonuc.get("roc_fpr") is not None:
+        st.markdown("#### ROC Eğrisi (Model Ayırt Etme Gücü)")
+        roc_grafigi_ciz(
+            [(algoritma_ad, sonuc["roc_fpr"], sonuc["roc_tpr"], metrikler["roc_auc"], "#9B2226")],
+            baslik=f"{algoritma_ad} — ROC Eğrisi",
+        )
+
     if sonuc["sonuclar_df"] is not None:
         with st.expander("Grid Search — En iyi 10 hiperparametre kombinasyonu"):
             st.dataframe(sonuc["sonuclar_df"].head(10), use_container_width=True)
+
+    if sonuc.get("cv_goster", True):
+        with st.spinner("5-Katlı Çapraz Doğrulama (5-Fold CV) hesaplanıyor..."):
+            kat_df, cv_ozet, cv_sure = capraz_dogrulama_calistir(algoritma_kod)
+        st.markdown("#### 5-Katlı Çapraz Doğrulama (5-Fold Cross-Validation)")
+        st.markdown(
+            '<div class="bento-grid bento-cols-3">'
+            + render_kpi_card("CV Accuracy (Ort ± Std)", f"%{cv_ozet['accuracy_ort'] * 100:.2f}", f"± %{cv_ozet['accuracy_std'] * 100:.2f} • {cv_sure:.2f} sn")
+            + render_kpi_card("CV F1 Skoru (Ort ± Std)", f"%{cv_ozet['f1_ort'] * 100:.2f}", f"± %{cv_ozet['f1_std'] * 100:.2f}")
+            + render_kpi_card("CV ROC-AUC (Ort ± Std)", f"{cv_ozet['roc_auc_ort']:.4f}", f"± {cv_ozet['roc_auc_std']:.4f}")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+        with st.expander("5-Katlı Çapraz Doğrulama — Katman Bazlı Sonuçlar"):
+            st.dataframe(kat_df, use_container_width=True)
 
     if algoritma_kod == "karar_agaci":
         with st.expander("Oluşturulan karar ağacı dallarını göster"):
@@ -885,9 +1056,12 @@ def goster_tekli_sonuc(algoritma_ad, algoritma_kod, sonuc, egitim_yuzdesi):
     elif algoritma_kod == "naive_bayes":
         with st.expander("En ayırt edici özellikler (İlk 15)"):
             st.dataframe(ekstra["ozellik_df"].head(15), use_container_width=True)
-    else:
+    elif algoritma_kod == "knn":
         with st.expander("En etkili özellik ağırlıkları (İlk 15)"):
             st.dataframe(ekstra["ozellik_df"].head(15), use_container_width=True)
+    else:
+        with st.expander("K-Means küme dağılımı ve küme içi hastalık oranları"):
+            st.dataframe(ekstra["kume_df"], use_container_width=True)
 
 
 # =========================================================
@@ -911,7 +1085,7 @@ except Exception as hata:
 kayit_sayisi_metin = f"{len(df):,}".replace(",", ".")
 ozellik_sayisi_metin = str(len(df.columns) - 1)
 
-gecerli_gorunumler = {"home", "karar_agaci", "lojistik", "naive_bayes", "knn", "karsilastir", "tahmin"}
+gecerli_gorunumler = {"home", "karar_agaci", "lojistik", "naive_bayes", "knn", "kmeans", "karsilastir", "tahmin", "eda"}
 aktif_gorunum = st.query_params.get("view", "home")
 if aktif_gorunum not in gecerli_gorunumler:
     aktif_gorunum = "home"
@@ -936,10 +1110,10 @@ if st.sidebar.button("🏠 Ana Sayfa (Kalp Atlası)", use_container_width=True):
     st.rerun()
 
 karsilastir_btn = st.sidebar.button(
-    "⚡ Dört Modeli Karşılaştır",
+    "⚡ Beş Modeli Karşılaştır",
     type="primary",
     use_container_width=True,
-    help="Optimize Karar Ağacı, Lojistik Regresyon, Naive Bayes ve KNN modellerini aynı test setinde yarıştırır.",
+    help="Optimize Karar Ağacı, Lojistik Regresyon, Naive Bayes, KNN ve K-Means modellerini aynı test setinde yarıştırır.",
 )
 if karsilastir_btn:
     st.query_params["view"] = "karsilastir"
@@ -948,9 +1122,17 @@ if karsilastir_btn:
 if st.sidebar.button(
     "🩺 Hasta Tahmin Sayfası",
     use_container_width=True,
-    help="Kişi özelliklerini seçerek 4 algoritmadan canlı kalp hastalığı tahmini alır.",
+    help="Kişi özelliklerini seçerek 5 algoritmadan canlı kalp hastalığı tahmini alır.",
 ):
     st.query_params["view"] = "tahmin"
+    st.rerun()
+
+if st.sidebar.button(
+    "📊 Veri Analizi (EDA)",
+    use_container_width=True,
+    help="Veri setindeki dağılımları, korelasyonları ve risk oranlarını inceler.",
+):
+    st.query_params["view"] = "eda"
     st.rerun()
 
 st.sidebar.divider()
@@ -961,7 +1143,7 @@ st.sidebar.markdown(
 
 algoritma = st.sidebar.radio(
     "Algoritma",
-    ["Karar Ağacı", "Lojistik Regresyon", "Naive Bayes", "KNN"],
+    ["Karar Ağacı", "Lojistik Regresyon", "Naive Bayes", "KNN", "K-Means (Denetimsiz)"],
     help="Tüm algoritmalar hazır ML kütüphanesi olmadan saf NumPy ile kodlanmıştır.",
 )
 
@@ -1005,7 +1187,7 @@ with st.sidebar.form("model_ayarlari"):
             egitim_yuzdesi = st.slider("Eğitim verisi oranı (%)", 60, 90, 80, 5)
         else:
             egitim_yuzdesi = st.slider("Eğitim verisi oranı (%)", 60, 90, 80, 5)
-    else:
+    elif algoritma == "KNN":
         budama_uygula = False
         if mod == "Manuel ayarlar":
             knn_k = st.slider("Komşu sayısı (K)", 3, 51, 25, 2)
@@ -1016,6 +1198,15 @@ with st.sidebar.form("model_ayarlari"):
             egitim_yuzdesi = st.slider("Eğitim verisi oranı (%)", 60, 90, 80, 5)
         else:
             knn_maks_ref = st.select_slider("Referans örnek sayısı", options=[5000, 10000, 15000, 25000], value=15000)
+            egitim_yuzdesi = st.slider("Eğitim verisi oranı (%)", 60, 90, 80, 5)
+    else:
+        budama_uygula = False
+        if mod == "Manuel ayarlar":
+            km_k = st.slider("Küme sayısı (K)", 2, 10, 2, 1)
+            km_baslatma = st.selectbox("Merkez başlatma", ["rastgele", "kmeans++"])
+            km_iter = st.slider("Maksimum iterasyon", 10, 50, 25, 5)
+            egitim_yuzdesi = st.slider("Eğitim verisi oranı (%)", 60, 90, 80, 5)
+        else:
             egitim_yuzdesi = st.slider("Eğitim verisi oranı (%)", 60, 90, 80, 5)
 
     calistir = st.form_submit_button("Seçili Ayarla Çalıştır", type="primary", use_container_width=True)
@@ -1030,8 +1221,10 @@ nav_ogeleri = [
     ("lojistik", "Lojistik Regresyon"),
     ("naive_bayes", "Naive Bayes"),
     ("knn", "KNN"),
+    ("kmeans", "K-Means (Negatif)"),
     ("tahmin", "🩺 Hasta Tahmini"),
-    ("karsilastir", "⚡ 4'lü Karşılaştırma"),
+    ("eda", "📊 Veri Analizi (EDA)"),
+    ("karsilastir", "⚡ 5'li Karşılaştırma"),
 ]
 nav_html = "".join(
     f'<a href="?view={kod}" target="_self" class="fabrica-nav-pill {"active" if (not calistir and aktif_gorunum == kod) else ""}">{ad}</a>'
@@ -1111,7 +1304,7 @@ if calistir:
                 model.fit(X_egitim, y_egitim, ozellik_isimleri)
                 ayar = {"yontem": nb_yontem, "alpha": nb_alpha, "var_smoothing": nb_var_smoothing}
             ekstra["ozellik_df"] = model.ozellik_ayirt_edicilik_df()
-        else:
+        elif algoritma == "KNN":
             alg_kod = "knn"
             if mod == "Otomatik optimizasyon (Grid Search)":
                 model, ayar, sonuclar_df = hiperparametre_ara_knn(
@@ -1135,14 +1328,40 @@ if calistir:
                 }
             ekstra["ozellik_df"] = model.ozellik_agirliklari_df()
             ekstra["referans_sayisi"] = len(model.X_ref_s)
+        else:
+            alg_kod = "kmeans"
+            if mod == "Otomatik optimizasyon (Grid Search)":
+                model, ayar, sonuclar_df = hiperparametre_ara_kmeans(
+                    X_egitim, y_egitim, X_dogrulama, y_dogrulama, ozellik_isimleri,
+                    hedef_metrik="accuracy",
+                )
+            else:
+                model = KMeansSiniflandirici(
+                    k=km_k,
+                    maks_iter=km_iter,
+                    baslatma=km_baslatma,
+                )
+                model.fit(X_egitim, y_egitim, ozellik_isimleri)
+                ayar = {
+                    "k": km_k,
+                    "baslatma": km_baslatma,
+                    "maks_iter": km_iter,
+                }
+            ekstra["kume_df"] = model.kume_ozeti_df()
+            ekstra["inertia"] = model.inertia
+            ekstra["tamamlanan_iterasyon"] = model.tamamlanan_iterasyon
 
         test_olasilik = model.predict_proba(X_test)
         tahmin = (test_olasilik >= 0.5).astype(int)
         metrikler = metrikleri_hesapla(y_test, tahmin, olasiliklar=test_olasilik)
+        roc_fpr, roc_tpr = roc_egrisi_hesapla(y_test, test_olasilik)
         sonuc = {
             "ayar": ayar,
             "sonuclar_df": sonuclar_df,
             "metrikler": metrikler,
+            "roc_fpr": roc_fpr,
+            "roc_tpr": roc_tpr,
+            "cv_goster": False,
             "sure": time.time() - baslangic,
             "n_train": len(y_egitim),
             "n_val": len(y_dogrulama) if dogrulama_gerekli else 0,
@@ -1180,7 +1399,7 @@ elif aktif_gorunum == "home":
 <div class="plate-ring-1"></div>
 <div class="plate-ring-2"></div>
 <div class="fabrica-heart-wrap">{heart_img_html}</div>
-<svg class="fabrica-svg" viewBox="0 0 1000 540" preserveAspectRatio="none">
+<svg class="fabrica-svg" viewBox="0 0 1000 620" preserveAspectRatio="none">
 <polyline points="445,195 360,125 275,125" fill="none" stroke="#9B2226" stroke-width="1.6" stroke-dasharray="4 5"/>
 <circle cx="445" cy="195" r="7" fill="rgba(155,34,38,0.22)" class="pin-halo"/>
 <circle cx="445" cy="195" r="4" fill="#9B2226"/>
@@ -1193,6 +1412,9 @@ elif aktif_gorunum == "home":
 <polyline points="545,335 635,415 725,415" fill="none" stroke="#9B2226" stroke-width="1.6" stroke-dasharray="4 5"/>
 <circle cx="545" cy="335" r="7" fill="rgba(155,34,38,0.22)" class="pin-halo"/>
 <circle cx="545" cy="335" r="4" fill="#9B2226"/>
+<polyline points="500,385 500,492" fill="none" stroke="#5C5549" stroke-width="1.5" stroke-dasharray="4 5"/>
+<circle cx="500" cy="385" r="6" fill="rgba(92,85,73,0.20)"/>
+<circle cx="500" cy="385" r="3.5" fill="#5C5549"/>
 </svg>
 <a href="?view=karar_agaci" target="_self" class="callout-node node-tl">
 <div class="callout-fig">FIG. 01 // AĞAÇ MİMARİSİ</div>
@@ -1218,6 +1440,12 @@ elif aktif_gorunum == "home":
 <div class="callout-desc">Öklid &amp; Kosinüs, Korelasyon Ağırlıklı, 32 Grid Search</div>
 <div class="callout-cta">Sonuçları İncele →</div>
 </a>
+<a href="?view=kmeans" target="_self" class="callout-node node-bc">
+<div class="callout-fig" style="color:var(--ink-muted);">FIG. 05 // NEGATİF REFERANS (DENETİMSİZ)</div>
+<div class="callout-title">K-Means Kümeleme</div>
+<div class="callout-desc">Etiketsiz Ham Öklid Kümeleme — Zayıf Performans Karşılaştırma Modeli</div>
+<div class="callout-cta" style="color:var(--ink-muted);">Sonuçları İncele →</div>
+</a>
 </div>""",
         unsafe_allow_html=True,
     )
@@ -1234,7 +1462,7 @@ elif aktif_gorunum == "home":
 </div>
 <div class="folio-cell">
 <div class="mono-label">ALGORİTMA</div>
-<div class="folio-val">4</div>
+<div class="folio-val">5</div>
 </div>
 <div class="folio-cell">
 <div class="mono-label">HEDEF SÜTUN</div>
@@ -1251,12 +1479,13 @@ elif aktif_gorunum == "home":
 # =========================================================
 # GORUNUM C: KALP NOKTALARINDAN SECILEN TEKLI MODEL
 # =========================================================
-elif aktif_gorunum in ("karar_agaci", "lojistik", "naive_bayes", "knn"):
+elif aktif_gorunum in ("karar_agaci", "lojistik", "naive_bayes", "knn", "kmeans"):
     isim_haritasi = {
         "karar_agaci": "Karar Ağacı",
         "lojistik": "Lojistik Regresyon",
         "naive_bayes": "Naive Bayes",
         "knn": "K-En Yakın Komşu (KNN)",
+        "kmeans": "K-Means Kümeleme (Negatif Referans)",
     }
     with st.spinner(f"{isim_haritasi[aktif_gorunum]} optimize ediliyor ve sonuçlar hazırlanıyor..."):
         sonuc = optimize_model_calistir(aktif_gorunum, egitim_yuzdesi=80)
@@ -1274,7 +1503,7 @@ elif aktif_gorunum == "tahmin":
     st.markdown(
         """<div class="result-header">
 <h2 class="result-title">🩺 Hasta Kalp Hastalığı Risk Tahmini</h2>
-<span class="mono-pill">4 Optimize Algoritma • Tahmin vs Gerçek Sonuç</span>
+<span class="mono-pill">5 Optimize Algoritma • Tahmin vs Gerçek Sonuç</span>
 </div>""",
         unsafe_allow_html=True,
     )
@@ -1284,6 +1513,7 @@ elif aktif_gorunum == "tahmin":
         lr_res = optimize_model_calistir("lojistik", egitim_yuzdesi=80)
         nb_res = optimize_model_calistir("naive_bayes", egitim_yuzdesi=80)
         knn_res = optimize_model_calistir("knn", egitim_yuzdesi=80)
+        km_res = optimize_model_calistir("kmeans", egitim_yuzdesi=80)
 
     ozellik_isimleri = ka_res["ozellik_isimleri"]
     tab_gercek, tab_manuel = st.tabs([
@@ -1345,6 +1575,7 @@ elif aktif_gorunum == "tahmin":
                 ("📈 Lojistik Regresyon", lr_res),
                 ("🎲 Naive Bayes", nb_res),
                 ("🧭 KNN", knn_res),
+                ("🫧 K-Means (Negatif)", km_res),
             ]:
                 olasilik = float(res["model"].predict_proba(X_kisi)[0])
                 tahmin = 1 if olasilik >= 0.5 else 0
@@ -1360,9 +1591,15 @@ elif aktif_gorunum == "tahmin":
                     )
                 )
             st.markdown(
-                '<div class="bento-grid bento-cols-4">' + "".join(kartlar_html) + "</div>",
+                '<div class="bento-grid bento-cols-5">' + "".join(kartlar_html) + "</div>",
                 unsafe_allow_html=True,
             )
+
+            st.markdown("#### 🔍 Neden Bu Kararı Verdi? (Hasta Bazlı XAI Açıklaması)")
+            xai_df = lr_res["model"].kisi_acikla(X_kisi)
+            xai_katki_grafigi_ciz(xai_df, top_n=10)
+            with st.expander("Tüm faktörlerin risk katkısı tablosu"):
+                st.dataframe(xai_df.head(15), use_container_width=True)
 
             with st.expander("Seçilen hastanın tüm 25 özelliğini görüntüle"):
                 ozellik_tablo = pd.DataFrame({
@@ -1417,7 +1654,7 @@ elif aktif_gorunum == "tahmin":
                 h_hrv = st.slider("HRV Skoru", 5.0, 100.0, 53.0, step=0.5)
 
             tahmin_yap = st.form_submit_button(
-                "🩺 4 Algoritmayla Kalp Hastalığı Tahmini Yap",
+                "🩺 5 Algoritmayla Kalp Hastalığı Tahmini Yap",
                 type="primary",
                 use_container_width=True,
             )
@@ -1460,6 +1697,7 @@ elif aktif_gorunum == "tahmin":
                 ("📈 Lojistik Regresyon", lr_res),
                 ("🎲 Naive Bayes", nb_res),
                 ("🧭 KNN", knn_res),
+                ("🫧 K-Means (Negatif)", km_res),
             ]:
                 olasilik = float(res["model"].predict_proba(X_manuel)[0])
                 tahmin = 1 if olasilik >= 0.5 else 0
@@ -1477,30 +1715,163 @@ elif aktif_gorunum == "tahmin":
 
             riskli_sayisi = sum(tahminler_bin)
             ort_olasilik = float(np.mean(olasiliklar)) * 100
-            if riskli_sayisi >= 2:
-                st.error(f"**Ortak Model Kararı:** {riskli_sayisi}/4 algoritma bu profilde **Kalp Hastalığı Riski (1)** öngörüyor (Ortalama Risk Olasılığı: **%{ort_olasilik:.1f}**).")
+            if riskli_sayisi >= 3:
+                st.error(f"**Ortak Model Kararı:** {riskli_sayisi}/5 algoritma bu profilde **Kalp Hastalığı Riski (1)** öngörüyor (Ortalama Risk Olasılığı: **%{ort_olasilik:.1f}**).")
             else:
-                st.success(f"**Ortak Model Kararı:** {4 - riskli_sayisi}/4 algoritma bu profili **Sağlıklı (0)** olarak değerlendiriyor (Ortalama Risk Olasılığı: **%{ort_olasilik:.1f}**).")
+                st.success(f"**Ortak Model Kararı:** {5 - riskli_sayisi}/5 algoritma bu profili **Sağlıklı (0)** olarak değerlendiriyor (Ortalama Risk Olasılığı: **%{ort_olasilik:.1f}**).")
 
             st.markdown(
-                '<div class="bento-grid bento-cols-4">' + "".join(kartlar_manuel) + "</div>",
+                '<div class="bento-grid bento-cols-5">' + "".join(kartlar_manuel) + "</div>",
                 unsafe_allow_html=True,
             )
 
+            st.markdown("#### 🔍 Neden Bu Kararı Verdi? (Hasta Bazlı XAI Açıklaması)")
+            xai_manuel_df = lr_res["model"].kisi_acikla(X_manuel)
+            xai_katki_grafigi_ciz(xai_manuel_df, top_n=10)
+            with st.expander("Tüm faktörlerin risk katkısı tablosu"):
+                st.dataframe(xai_manuel_df.head(15), use_container_width=True)
+
 
 # =========================================================
-# GORUNUM D: 4'LU KARSILASTIRMA
+# GORUNUM C-3: KESIFSEL VERI ANALIZI (EDA)
+# =========================================================
+elif aktif_gorunum == "eda":
+    st.markdown(
+        '<a class="back-link" href="?view=home" target="_self">← Kalp Atlasına Dön (Ana Sayfa)</a>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""<div class="result-header">
+<h2 class="result-title">📊 Keşifsel Veri Analizi (EDA)</h2>
+<span class="mono-pill">{kayit_sayisi_metin} Kayıt • {ozellik_sayisi_metin} Özellik • Eksik Değer: 0</span>
+</div>""",
+        unsafe_allow_html=True,
+    )
+
+    hasta_orani = float(df[HEDEF_SUTUN].mean()) * 100
+    saglikli_orani = 100.0 - hasta_orani
+    st.markdown(
+        '<div class="bento-grid bento-cols-4">'
+        + render_kpi_card("Toplam Kayıt", kayit_sayisi_metin, "Temizlenmiş klinik gözlem")
+        + render_kpi_card("Sağlıklı Oranı (0)", f"%{saglikli_orani:.2f}", f"{int((df[HEDEF_SUTUN] == 0).sum()):,} kişi".replace(",", "."))
+        + render_kpi_card("Kalp Hastası Oranı (1)", f"%{hasta_orani:.2f}", f"{int((df[HEDEF_SUTUN] == 1).sum()):,} kişi".replace(",", "."))
+        + render_kpi_card("Eksik Değer", str(int(df.isna().sum().sum())), "Veri seti %100 dolu")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    eda_c1, eda_c2 = st.columns(2)
+    with eda_c1:
+        st.markdown("#### Kategorik / İkili Değişkenlere Göre Risk Oranı")
+        kat_sutunlar = [
+            "sex", "smoking_status", "alcohol_intake", "physical_activity",
+            "diabetes", "hypertension", "family_history", "previous_heart_event",
+            "exercise_angina", "resting_ecg", "st_slope", "income_level", "region",
+        ]
+        sec_kat = st.selectbox("İncelenecek kategorik özellik", kat_sutunlar, key="eda_kat")
+        grup = df.groupby(sec_kat)[HEDEF_SUTUN].agg(["mean", "count"]).reset_index()
+        grup["yuzde"] = grup["mean"] * 100
+        grup = grup.sort_values(by="yuzde", ascending=True)
+
+        fig1, ax1 = plt.subplots(figsize=(6.0, 3.8), facecolor="#FAF7F0")
+        ax1.set_facecolor("#FAF7F0")
+        ax1.barh(grup[sec_kat].astype(str), grup["yuzde"], color="#9B2226", height=0.55, edgecolor="#1E1B18", linewidth=0.4)
+        ax1.set_xlabel("Kalp Hastalığı Oranı (%)", fontsize=9, color="#1E1B18")
+        ax1.set_title(f"{sec_kat} Özelliğine Göre Hastalık Oranı", fontsize=10.5, fontweight="bold", color="#1E1B18")
+        ax1.grid(axis="x", linestyle=":", alpha=0.5, color="#B9AD99")
+        for s in ("top", "right"):
+            ax1.spines[s].set_visible(False)
+        ax1.tick_params(colors="#1E1B18", labelsize=8.5)
+        plt.tight_layout()
+        st.pyplot(fig1, use_container_width=True)
+        plt.close(fig1)
+
+    with eda_c2:
+        st.markdown("#### Sayısal Değişken Dağılımı (Sağlıklı vs Hasta)")
+        num_sutunlar = [
+            "age", "bmi", "resting_bp", "cholesterol", "max_heart_rate",
+            "st_depression", "avg_resting_hr", "hrv_score", "sleep_hours",
+            "stress_level", "diet_quality",
+        ]
+        sec_num = st.selectbox("İncelenecek sayısal özellik", num_sutunlar, key="eda_num")
+        v0 = df[df[HEDEF_SUTUN] == 0][sec_num]
+        v1 = df[df[HEDEF_SUTUN] == 1][sec_num]
+
+        fig2, ax2 = plt.subplots(figsize=(6.0, 3.8), facecolor="#FAF7F0")
+        ax2.set_facecolor("#FAF7F0")
+        ax2.hist(v0, bins=28, alpha=0.55, density=True, color="#2D6A4F", label=f"Sağlıklı (Ort: {v0.mean():.1f})")
+        ax2.hist(v1, bins=28, alpha=0.55, density=True, color="#9B2226", label=f"Kalp Hastası (Ort: {v1.mean():.1f})")
+        ax2.set_xlabel(sec_num, fontsize=9, color="#1E1B18")
+        ax2.set_ylabel("Yoğunluk", fontsize=9, color="#1E1B18")
+        ax2.set_title(f"{sec_num} Dağılım Karşılaştırması", fontsize=10.5, fontweight="bold", color="#1E1B18")
+        ax2.grid(True, linestyle=":", alpha=0.5, color="#B9AD99")
+        for s in ("top", "right"):
+            ax2.spines[s].set_visible(False)
+        ax2.legend(frameon=True, facecolor="#F4EFE4", edgecolor="#D8CFC0", fontsize=8.3)
+        plt.tight_layout()
+        st.pyplot(fig2, use_container_width=True)
+        plt.close(fig2)
+
+    st.markdown("#### Korelasyon Analizi")
+    kor_c1, kor_c2 = st.columns([1, 1.15])
+    sayisal_df = df.select_dtypes(include=[np.number])
+    hedef_kor = sayisal_df.corr()[HEDEF_SUTUN].drop(HEDEF_SUTUN).sort_values()
+
+    with kor_c1:
+        fig3, ax3 = plt.subplots(figsize=(6.0, 4.4), facecolor="#FAF7F0")
+        ax3.set_facecolor("#FAF7F0")
+        renkler_k = ["#9B2226" if v > 0 else "#2D6A4F" for v in hedef_kor.values]
+        ax3.barh(hedef_kor.index, hedef_kor.values, color=renkler_k, height=0.65, edgecolor="#1E1B18", linewidth=0.4)
+        ax3.axvline(0.0, color="#1E1B18", linewidth=1.0)
+        ax3.set_title("Hedef Değişkenle (heart_disease) Korelasyon", fontsize=10.5, fontweight="bold", color="#1E1B18")
+        ax3.grid(axis="x", linestyle=":", alpha=0.5, color="#B9AD99")
+        for s in ("top", "right"):
+            ax3.spines[s].set_visible(False)
+        ax3.tick_params(colors="#1E1B18", labelsize=8)
+        plt.tight_layout()
+        st.pyplot(fig3, use_container_width=True)
+        plt.close(fig3)
+
+    with kor_c2:
+        anahtar_sutunlar = [
+            "age", "bmi", "resting_bp", "cholesterol", "max_heart_rate",
+            "st_depression", "avg_resting_hr", "hrv_score", HEDEF_SUTUN,
+        ]
+        kor_mat = df[anahtar_sutunlar].corr()
+        fig4, ax4 = plt.subplots(figsize=(6.4, 4.4), facecolor="#FAF7F0")
+        im = ax4.imshow(kor_mat.values, cmap="RdBu_r", vmin=-0.6, vmax=0.6)
+        ax4.set_xticks(range(len(anahtar_sutunlar)))
+        ax4.set_yticks(range(len(anahtar_sutunlar)))
+        ax4.set_xticklabels(anahtar_sutunlar, rotation=38, ha="right", fontsize=8, color="#1E1B18")
+        ax4.set_yticklabels(anahtar_sutunlar, fontsize=8, color="#1E1B18")
+        ax4.set_title("Klinik Özellikler Korelasyon Matrisi", fontsize=10.5, fontweight="bold", color="#1E1B18")
+        fig4.colorbar(im, ax=ax4, fraction=0.046, pad=0.04)
+        plt.tight_layout()
+        st.pyplot(fig4, use_container_width=True)
+        plt.close(fig4)
+
+    with st.expander("Temel İstatistik Özeti (describe)"):
+        st.dataframe(sayisal_df.describe().T, use_container_width=True)
+
+
+# =========================================================
+# GORUNUM D: 5'LI KARSILASTIRMA
 # =========================================================
 else:
-    with st.spinner("Her dört optimize model çalıştırılıyor ve karşılaştırılıyor..."):
+    with st.spinner("Her beş optimize model çalıştırılıyor ve karşılaştırılıyor..."):
         ka_res = optimize_model_calistir("karar_agaci", egitim_yuzdesi=80)
         lr_res = optimize_model_calistir("lojistik", egitim_yuzdesi=80)
         nb_res = optimize_model_calistir("naive_bayes", egitim_yuzdesi=80)
         knn_res = optimize_model_calistir("knn", egitim_yuzdesi=80)
+        km_res = optimize_model_calistir("kmeans", egitim_yuzdesi=80)
 
-    ka_m, lr_m, nb_m, knn_m = ka_res["metrikler"], lr_res["metrikler"], nb_res["metrikler"], knn_res["metrikler"]
-    ka_a, lr_a, nb_a, knn_a = ka_res["ayar"], lr_res["ayar"], nb_res["ayar"], knn_res["ayar"]
-    toplam_sure = ka_res["sure"] + lr_res["sure"] + nb_res["sure"] + knn_res["sure"]
+    ka_m, lr_m, nb_m, knn_m, km_m = (
+        ka_res["metrikler"], lr_res["metrikler"], nb_res["metrikler"], knn_res["metrikler"], km_res["metrikler"]
+    )
+    ka_a, lr_a, nb_a, knn_a, km_a = (
+        ka_res["ayar"], lr_res["ayar"], nb_res["ayar"], knn_res["ayar"], km_res["ayar"]
+    )
+    toplam_sure = ka_res["sure"] + lr_res["sure"] + nb_res["sure"] + knn_res["sure"] + km_res["sure"]
 
     st.markdown(
         '<a class="back-link" href="?view=home" target="_self">← Kalp Atlasına Dön (Ana Sayfa)</a>',
@@ -1508,15 +1879,15 @@ else:
     )
     st.markdown(
         f"""<div class="result-header">
-<h2 class="result-title">⚡ Dörtlü Optimize Model Karşılaştırması</h2>
+<h2 class="result-title">⚡ Beşli Optimize Model Karşılaştırması</h2>
 <span class="mono-pill">Eğitim: {ka_res['n_train']:,} | Doğrulama: {ka_res['n_val']:,} | Test: {ka_res['n_test']:,} • {toplam_sure:.2f} sn</span>
 </div>""",
         unsafe_allow_html=True,
     )
 
-    en_iyi_acc = max(ka_m["accuracy"], lr_m["accuracy"], nb_m["accuracy"], knn_m["accuracy"])
+    en_iyi_acc = max(ka_m["accuracy"], lr_m["accuracy"], nb_m["accuracy"], knn_m["accuracy"], km_m["accuracy"])
     st.markdown(
-        '<div class="bento-grid bento-cols-4">'
+        '<div class="bento-grid bento-cols-5">'
         + render_kpi_card(
             "🌳 Karar Ağacı",
             f"%{ka_m['accuracy'] * 100:.2f}",
@@ -1545,24 +1916,37 @@ else:
             delta="★ En Yüksek Doğruluk" if knn_m["accuracy"] == en_iyi_acc else f"{knn_a['mesafe'].upper()} k={knn_a['k']}",
             delta_positive=(knn_m["accuracy"] == en_iyi_acc),
         )
+        + render_kpi_card(
+            "🫧 K-Means (Negatif)",
+            f"%{km_m['accuracy'] * 100:.2f}",
+            f"F1: %{km_m['f1'] * 100:.2f} • AUC: {km_m['roc_auc']:.4f} • {km_res['sure']:.2f} sn",
+            delta="✗ Negatif Referans (Denetimsiz)",
+            delta_positive=False,
+        )
         + "</div>",
         unsafe_allow_html=True,
     )
 
     st.markdown("#### Tüm Performans Metrikleri (Test Seti)")
     karsilastirma_satirlari = [
-        ("Accuracy (%)", ka_m["accuracy"] * 100, lr_m["accuracy"] * 100, nb_m["accuracy"] * 100, knn_m["accuracy"] * 100, True),
-        ("Precision (%)", ka_m["precision"] * 100, lr_m["precision"] * 100, nb_m["precision"] * 100, knn_m["precision"] * 100, True),
-        ("Recall / Duyarlılık (%)", ka_m["recall"] * 100, lr_m["recall"] * 100, nb_m["recall"] * 100, knn_m["recall"] * 100, True),
-        ("Specificity / Özgüllük (%)", ka_m["specificity"] * 100, lr_m["specificity"] * 100, nb_m["specificity"] * 100, knn_m["specificity"] * 100, True),
-        ("F1 Skoru (%)", ka_m["f1"] * 100, lr_m["f1"] * 100, nb_m["f1"] * 100, knn_m["f1"] * 100, True),
-        ("ROC-AUC", ka_m["roc_auc"], lr_m["roc_auc"], nb_m["roc_auc"], knn_m["roc_auc"], True),
-        ("Log-Loss (düşük = iyi)", ka_m["log_loss"], lr_m["log_loss"], nb_m["log_loss"], knn_m["log_loss"], False),
-        ("Süre (saniye, düşük = hızlı)", ka_res["sure"], lr_res["sure"], nb_res["sure"], knn_res["sure"], False),
+        ("Accuracy (%)", ka_m["accuracy"] * 100, lr_m["accuracy"] * 100, nb_m["accuracy"] * 100, knn_m["accuracy"] * 100, km_m["accuracy"] * 100, True),
+        ("Precision (%)", ka_m["precision"] * 100, lr_m["precision"] * 100, nb_m["precision"] * 100, knn_m["precision"] * 100, km_m["precision"] * 100, True),
+        ("Recall / Duyarlılık (%)", ka_m["recall"] * 100, lr_m["recall"] * 100, nb_m["recall"] * 100, knn_m["recall"] * 100, km_m["recall"] * 100, True),
+        ("Specificity / Özgüllük (%)", ka_m["specificity"] * 100, lr_m["specificity"] * 100, nb_m["specificity"] * 100, knn_m["specificity"] * 100, km_m["specificity"] * 100, True),
+        ("F1 Skoru (%)", ka_m["f1"] * 100, lr_m["f1"] * 100, nb_m["f1"] * 100, knn_m["f1"] * 100, km_m["f1"] * 100, True),
+        ("ROC-AUC", ka_m["roc_auc"], lr_m["roc_auc"], nb_m["roc_auc"], knn_m["roc_auc"], km_m["roc_auc"], True),
+        ("Log-Loss (düşük = iyi)", ka_m["log_loss"], lr_m["log_loss"], nb_m["log_loss"], knn_m["log_loss"], km_m["log_loss"], False),
+        ("Süre (saniye, düşük = hızlı)", ka_res["sure"], lr_res["sure"], nb_res["sure"], knn_res["sure"], km_res["sure"], False),
     ]
     tablo_satirlari = []
-    for ad, ka_v, lr_v, nb_v, knn_v, yuksek_iyi in karsilastirma_satirlari:
-        adaylar = {"Karar Ağacı": ka_v, "Lojistik Regresyon": lr_v, "Naive Bayes": nb_v, "KNN": knn_v}
+    for ad, ka_v, lr_v, nb_v, knn_v, km_v, yuksek_iyi in karsilastirma_satirlari:
+        adaylar = {
+            "Karar Ağacı": ka_v,
+            "Lojistik Regresyon": lr_v,
+            "Naive Bayes": nb_v,
+            "KNN": knn_v,
+            "K-Means (Negatif)": km_v,
+        }
         en_iyi_ad = max(adaylar, key=adaylar.get) if yuksek_iyi else min(adaylar, key=adaylar.get)
         tablo_satirlari.append({
             "Metrik": ad,
@@ -1570,21 +1954,56 @@ else:
             "Lojistik Regresyon": round(lr_v, 4),
             "Naive Bayes": round(nb_v, 4),
             "KNN": round(knn_v, 4),
+            "K-Means (Negatif)": round(km_v, 4),
             "En İyi": en_iyi_ad,
         })
     st.dataframe(pd.DataFrame(tablo_satirlari), use_container_width=True)
 
-    st.markdown("#### Görsel Performans Grafiği")
-    grafik_df = pd.DataFrame(
-        {
-            "Karar Ağacı": [ka_m["accuracy"], ka_m["precision"], ka_m["recall"], ka_m["specificity"], ka_m["f1"], ka_m["roc_auc"]],
-            "Lojistik Regresyon": [lr_m["accuracy"], lr_m["precision"], lr_m["recall"], lr_m["specificity"], lr_m["f1"], lr_m["roc_auc"]],
-            "Naive Bayes": [nb_m["accuracy"], nb_m["precision"], nb_m["recall"], nb_m["specificity"], nb_m["f1"], nb_m["roc_auc"]],
-            "KNN": [knn_m["accuracy"], knn_m["precision"], knn_m["recall"], knn_m["specificity"], knn_m["f1"], knn_m["roc_auc"]],
-        },
-        index=["Accuracy", "Precision", "Recall", "Specificity", "F1", "ROC-AUC"],
-    )
-    st.bar_chart(grafik_df)
+    st.markdown("#### Görsel Performans Grafiği & ROC Eğrileri")
+    grafik_c1, grafik_c2 = st.columns(2)
+    with grafik_c1:
+        grafik_df = pd.DataFrame(
+            {
+                "Karar Ağacı": [ka_m["accuracy"], ka_m["precision"], ka_m["recall"], ka_m["specificity"], ka_m["f1"], ka_m["roc_auc"]],
+                "Lojistik Regresyon": [lr_m["accuracy"], lr_m["precision"], lr_m["recall"], lr_m["specificity"], lr_m["f1"], lr_m["roc_auc"]],
+                "Naive Bayes": [nb_m["accuracy"], nb_m["precision"], nb_m["recall"], nb_m["specificity"], nb_m["f1"], nb_m["roc_auc"]],
+                "KNN": [knn_m["accuracy"], knn_m["precision"], knn_m["recall"], knn_m["specificity"], knn_m["f1"], knn_m["roc_auc"]],
+                "K-Means (Negatif)": [km_m["accuracy"], km_m["precision"], km_m["recall"], km_m["specificity"], km_m["f1"], km_m["roc_auc"]],
+            },
+            index=["Accuracy", "Precision", "Recall", "Specificity", "F1", "ROC-AUC"],
+        )
+        st.bar_chart(grafik_df)
+    with grafik_c2:
+        roc_grafigi_ciz(
+            [
+                ("Lojistik Regresyon", lr_res["roc_fpr"], lr_res["roc_tpr"], lr_m["roc_auc"], "#9B2226"),
+                ("Naive Bayes", nb_res["roc_fpr"], nb_res["roc_tpr"], nb_m["roc_auc"], "#2D6A4F"),
+                ("KNN", knn_res["roc_fpr"], knn_res["roc_tpr"], knn_m["roc_auc"], "#1D4ED8"),
+                ("Karar Ağacı", ka_res["roc_fpr"], ka_res["roc_tpr"], ka_m["roc_auc"], "#B45309"),
+                ("K-Means (Negatif)", km_res["roc_fpr"], km_res["roc_tpr"], km_m["roc_auc"], "#6B7280"),
+            ],
+            baslik="5 Model ROC Eğrileri Karşılaştırması",
+        )
+
+    with st.spinner("5-Katlı Çapraz Doğrulama (5-Fold CV) sonuçları hazırlanıyor..."):
+        cv_satirlari = []
+        for kod, ad in [
+            ("karar_agaci", "Karar Ağacı"),
+            ("lojistik", "Lojistik Regresyon"),
+            ("naive_bayes", "Naive Bayes"),
+            ("knn", "KNN"),
+            ("kmeans", "K-Means (Negatif)"),
+        ]:
+            _, oz, cv_sn = capraz_dogrulama_calistir(kod)
+            cv_satirlari.append({
+                "Model": ad,
+                "5-Fold Accuracy": f"%{oz['accuracy_ort'] * 100:.2f} ± {oz['accuracy_std'] * 100:.2f}",
+                "5-Fold F1": f"%{oz['f1_ort'] * 100:.2f} ± {oz['f1_std'] * 100:.2f}",
+                "5-Fold ROC-AUC": f"{oz['roc_auc_ort']:.4f} ± {oz['roc_auc_std']:.4f}",
+                "5-Fold Süre (sn)": round(cv_sn, 2),
+            })
+    st.markdown("#### 5-Katlı Çapraz Doğrulama (5-Fold Cross-Validation) Özeti")
+    st.dataframe(pd.DataFrame(cv_satirlari), use_container_width=True)
 
     st.markdown("#### Karışıklık Matrisleri")
     cm_r1_c1, cm_r1_c2 = st.columns(2)
@@ -1602,6 +2021,11 @@ else:
     with cm_r2_c2:
         st.caption(f"KNN ({knn_a['mesafe'].upper()}, k={knn_a['k']}, {knn_a['agirliklandirma']}, ağırlıklı={knn_a['ozellik_agirlikli']})")
         st.dataframe(pd.DataFrame([[knn_m["tn"], knn_m["fp"]], [knn_m["fn"], knn_m["tp"]]], index=["Gerçek: Sağlıklı (0)", "Gerçek: Kalp Hastası (1)"], columns=["Tahmin: Sağlıklı (0)", "Tahmin: Kalp Hastası (1)"]), use_container_width=True)
+
+    cm_r3_c1, _ = st.columns(2)
+    with cm_r3_c1:
+        st.caption(f"K-Means Negatif Referans ({km_a['baslatma'].upper()}, k={km_a['k']}, iter={km_a['maks_iter']})")
+        st.dataframe(pd.DataFrame([[km_m["tn"], km_m["fp"]], [km_m["fn"], km_m["tp"]]], index=["Gerçek: Sağlıklı (0)", "Gerçek: Kalp Hastası (1)"], columns=["Tahmin: Sağlıklı (0)", "Tahmin: Kalp Hastası (1)"]), use_container_width=True)
     st.caption(
         "0 = Sağlıklı, 1 = Kalp Hastası. Sol üst ve sağ alt kutular doğru tahminleri; "
         "diğer iki kutu ise hatalı tahminleri gösterir."
@@ -1615,6 +2039,10 @@ else:
         st.dataframe(nb_res["sonuclar_df"].head(10), use_container_width=True)
     with st.expander("KNN — En iyi 10 Grid Search sonucu"):
         st.dataframe(knn_res["sonuclar_df"].head(10), use_container_width=True)
+    with st.expander("K-Means — En iyi 10 Grid Search sonucu"):
+        st.dataframe(km_res["sonuclar_df"].head(10), use_container_width=True)
+    with st.expander("K-Means — Küme özet tablosu"):
+        st.dataframe(km_res["ekstra"]["kume_df"], use_container_width=True)
     with st.expander("Lojistik Regresyon — En etkili özellik ağırlıkları (İlk 15)"):
         st.dataframe(lr_res["ekstra"]["ozellik_df"].head(15), use_container_width=True)
     with st.expander("KNN — Korelasyon özellik ağırlıkları (İlk 15)"):
@@ -1643,7 +2071,8 @@ sıfırdan geliştirilmiş anatomik ML atlası.
 • Karar Ağacı (Histogram + Budama)<br>
 • Lojistik Regresyon (SGD, Momentum, RMSProp, Adam)<br>
 • Naive Bayes (Gaussian, Hibrit, Histogram)<br>
-• KNN (Öklid, Kosinüs, Korelasyon Ağırlıklı)
+• KNN (Öklid, Kosinüs, Korelasyon Ağırlıklı)<br>
+• K-Means Kümeleme (Denetimsiz Negatif Referans)
 </div>
 </div>
 <div>
